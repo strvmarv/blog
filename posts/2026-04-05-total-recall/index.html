@@ -100,6 +100,129 @@
   Bundling auth-core, auth-utils, and auth-tests into a single PR.</span>
 </pre>
 
+  <h2>Architecture Deep Dive</h2>
+
+  <h3>Local-First Embeddings</h3>
+
+  <p>Every memory is vectorized on write using <code>all-MiniLM-L6-v2</code> — a sentence transformer that produces 384-dimensional embeddings. It runs locally via ONNX Runtime. No API keys, no network calls, no cloud dependency. The model ships bundled with the package.</p>
+
+  <p>Storage is SQLite with the <code>sqlite-vec</code> extension for vector similarity search. A single file at <code>~/.total-recall/total-recall.db</code> holds everything — memories, embeddings, knowledge chunks, compaction logs, and eval metrics.</p>
+
+  <h3>Hybrid Search</h3>
+
+  <p>Retrieval combines two signals: vector similarity (cosine distance in 384-dimensional space) and full-text search (BM25 via SQLite FTS5). The scores are fused with a configurable weight — by default, 70% semantic similarity + 30% keyword match. This catches both conceptual and exact-match queries.</p>
+
+<pre class="tui-block"><span class="accent">Query: "how does authentication work?"</span>
+
+<span class="info">Vector search</span>  <span class="dim">---</span>  embed(query) <span class="dim">-></span> cosine similarity <span class="dim">-></span> top K
+                <span class="dim">|</span>
+<span class="info">FTS5 search</span>    <span class="dim">---</span>  tokenize(query) <span class="dim">-></span> BM25 ranking <span class="dim">-></span> top K
+                <span class="dim">|</span>
+<span class="prompt">Score fusion</span>   <span class="dim">---</span>  0.7 * vector + 0.3 * fts <span class="dim">-></span> ranked results
+</pre>
+
+  <h3>Decay and Compaction</h3>
+
+  <p>Memories aren't permanent — they decay. The decay formula combines three factors:</p>
+
+  <ul>
+    <li><strong>Time factor:</strong> exponential decay with a 7-day half-life. A memory untouched for a week has half its original score.</li>
+    <li><strong>Frequency factor:</strong> <code>1 + log2(1 + access_count)</code> — frequently accessed memories resist decay.</li>
+    <li><strong>Type weight:</strong> corrections (1.5x) and preferences (1.3x) decay slower than general memories (1.0x). Your mistakes are the most valuable thing to remember.</li>
+  </ul>
+
+  <p>At session end, compaction runs: hot entries scoring below 0.7 demote to warm. Warm entries scoring below 0.3 demote to cold. Cold entries that become relevant again promote back up. The system self-tunes.</p>
+
+  <h2>Cross-Platform: One Memory, Every Tool</h2>
+
+  <p>total-recall speaks <a href="https://modelcontextprotocol.io/">MCP (Model Context Protocol)</a> — the emerging standard for tool-to-model communication. Any MCP-compatible coding assistant can use it. But the real win is the import system.</p>
+
+  <p>On first <code>session_start</code>, total-recall scans for existing memories across six platforms and migrates them automatically:</p>
+
+  <div class="platform-grid">
+    <div class="platform-badge">Claude Code</div>
+    <div class="platform-badge">Copilot CLI</div>
+    <div class="platform-badge">Cursor</div>
+    <div class="platform-badge">Cline</div>
+    <div class="platform-badge">OpenCode</div>
+    <div class="platform-badge">Hermes</div>
+  </div>
+
+  <p>Each importer knows where its host tool stores memories — <code>~/.claude/projects/*/memory/*.md</code> for Claude Code, <code>.cursorrules</code> for Cursor, SQLite databases for Cline. Content hashes prevent duplicate imports. Switch tools freely; your memory follows.</p>
+
+<pre class="tui-block"><span class="accent">session_start</span>
+
+1. Initialize embedder         <span class="dim">.............</span> <span class="prompt">ok</span>
+2. Import: Claude Code          <span class="dim">.............</span> <span class="prompt">3 new</span>
+3. Import: Copilot CLI          <span class="dim">.............</span> <span class="prompt">1 new</span>
+4. Import: Cursor               <span class="dim">.............</span> <span class="dim">skipped</span>
+5. Warm sweep                   <span class="dim">.............</span> <span class="prompt">2 demoted</span>
+6. Project docs ingest          <span class="dim">.............</span> <span class="prompt">12 chunks</span>
+7. Smoke test                   <span class="dim">.............</span> <span class="prompt">22/22 pass</span>
+8. Hot tier assembly            <span class="dim">.............</span> <span class="prompt">3 entries, 1.2K tokens</span>
+</pre>
+
+  <h2>Observability: Is Memory Actually Helping?</h2>
+
+  <p>Most memory systems are fire-and-forget. You store things, hope they come back, and have no way to measure if retrieval is working. total-recall ships a full eval framework.</p>
+
+  <p>A 139-query benchmark suite runs on version changes to validate retrieval quality. Each query has expected results — both what <em>should</em> surface and what <em>shouldn't</em>. The system tracks precision, hit rate, mean reciprocal rank, and per-tier routing accuracy.</p>
+
+<pre class="tui-block"><span class="accent">/total-recall eval</span>
+
+<span class="bright">Retrieval Quality (7-day rolling)</span>
+<span class="dim">----------------------------------------------</span>
+  Precision          <span class="prompt">0.94</span>     <span class="dim">(target: 0.85)</span>
+  Hit rate           <span class="prompt">0.91</span>     <span class="dim">(target: 0.80)</span>
+  MRR                <span class="prompt">0.88</span>     <span class="dim">(target: 0.75)</span>
+  Avg latency        <span class="info">12ms</span>
+<span class="dim">----------------------------------------------</span>
+
+<span class="bright">Per-Tier Breakdown</span>
+<span class="dim">----------------------------------------------</span>
+  Hot    <span class="err">3</span>  entries   precision <span class="prompt">1.00</span>
+  Warm   <span class="warn">12</span> entries   precision <span class="prompt">0.92</span>
+  Cold   <span class="info">847</span> chunks   precision <span class="prompt">0.89</span>
+<span class="dim">----------------------------------------------</span>
+
+<span class="bright">Regression Detection</span>
+<span class="dim">----------------------------------------------</span>
+  vs. previous config  <span class="prompt">no regressions</span>
+</pre>
+
+  <p>Config snapshots enable A/B comparison — change a threshold, run the benchmark, compare metrics side-by-side. Retrieval misses are captured as benchmark candidates, so the test suite grows organically from real-world failures. The eval system improves itself.</p>
+
+  <h2>Getting Started</h2>
+
+  <p>For Claude Code users — one command:</p>
+
+<pre class="tui-block"><span class="prompt">/plugin install</span> <span class="bright">total-recall@strvmarv-total-recall-marketplace</span>
+</pre>
+
+  <p>For any MCP-compatible tool (Copilot CLI, Cursor, Cline, OpenCode, Hermes):</p>
+
+<pre class="tui-block"><span class="prompt">npm install -g</span> <span class="bright">@strvmarv/total-recall</span>
+</pre>
+
+  <p>Then add it to your tool's MCP config:</p>
+
+<pre class="tui-block"><span class="dim">{</span>
+  <span class="dim">"mcpServers"</span><span class="dim">:</span> <span class="dim">{</span>
+    <span class="info">"total-recall"</span><span class="dim">:</span> <span class="dim">{</span>
+      <span class="info">"command"</span><span class="dim">:</span> <span class="prompt">"total-recall"</span>
+    <span class="dim">}</span>
+  <span class="dim">}</span>
+<span class="dim">}</span>
+</pre>
+
+  <p>Or paste this into any AI coding assistant and it will install itself:</p>
+
+  <blockquote>Install the total-recall memory plugin: fetch and follow the instructions at <a href="https://raw.githubusercontent.com/strvmarv/total-recall/main/INSTALL.md">INSTALL.md</a></blockquote>
+
+  <p>On first session, total-recall initializes its database, imports your existing memories, and starts working. No configuration required — the defaults are tuned from the eval benchmark.</p>
+
+  <p>Source: <a href="https://github.com/strvmarv/total-recall">github.com/strvmarv/total-recall</a> &middot; npm: <a href="https://www.npmjs.com/package/@strvmarv/total-recall">@strvmarv/total-recall</a></p>
+
 </div>
 
 <footer>
