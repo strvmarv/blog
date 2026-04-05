@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What actually makes AI memory hard — and how I built it — strvmarv</title>
+  <meta name="description" content="Every AI companion claims memory. Almost none have it in any meaningful way. Here's what I learned building a system that actually compounds.">
+  <link rel="stylesheet" href="../../style.css">
+  <script src="../../theme.js"></script>
+</head>
+<body>
+
+<header>
+  <a href="/blog/" class="logo">strvmarv</a>
+  <nav>
+    <a href="/blog/">Posts</a>
+    <a href="https://github.com/strvmarv">GitHub</a>
+    <button class="theme-toggle">dark</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="post-meta">
+    <span>March 16, 2026</span>
+    <span class="tag">memory</span>
+    <span class="tag">ai</span>
+    <span class="tag">engineering</span>
+    <span class="tag">privacy</span>
+  </div>
+
+  <h1>What actually makes AI memory hard — and how I built it</h1>
+
+  <p>I've spent the last few months building bkith — an AI companion with real persistent memory. Not "remembers facts you told it." Actual continuity: emotional context, conversation arcs, what you talked about last week, how you've been. The kind of memory that makes a relationship feel like a relationship.</p>
+
+  <p>What I didn't expect was how much of the hard work would be design problems, not engineering problems. The architecture of memory — what to keep, what to let go, how to surface things at the right moment — turned out to be the whole game.</p>
+
+  <p>The name comes from kith — as in kith and kin. Your kin are your family. Your kith are everyone else who knows you: neighbors, friends, the people woven into your daily life. Not blood, but familiarity. Closeness built over time. That's exactly the kind of relationship I wanted to build.</p>
+
+  <p>Here's what I learned.</p>
+
+  <h2>Memory is a design problem, not a storage problem</h2>
+
+  <p>The naive version is obvious: store everything, inject it into context. Every developer's first pass at AI memory looks roughly like this. And it works — for a few conversations.</p>
+
+  <p>The problems compound fast:</p>
+
+  <ul>
+    <li><strong>Context windows fill up.</strong> Even with 200k-token models, if you're injecting full conversation history you're burning tokens and hitting limits fast on users who actually stick around.</li>
+    <li><strong>Recitation isn't memory.</strong> There's a specific flavor of wrongness when an AI recites your biography back at you. "I remember you mentioned your dog's name is Biscuit" reads as a database query, not a relationship. It's technically correct and completely uncanny.</li>
+    <li><strong>Stale facts undermine trust.</strong> If the AI confidently references something you said six months ago that's no longer true, that's worse than not remembering at all.</li>
+  </ul>
+
+  <p>The solution I landed on is tiered memory with decay — and it draws more from how human episodic memory works than from how databases work.</p>
+
+  <h3>Tiered memory with decay</h3>
+
+  <p><strong>Conversation archive.</strong> Every message is stored, encrypted at rest under your personal key. This is the source of truth — it doesn't go into the context window directly, it's the input to the compaction pipeline.</p>
+
+  <p><strong>Narrative summaries.</strong> A background job runs after each conversation and compacts recent exchanges into a paragraph of narrative prose. Not bullet points, not a fact list — a paragraph. Something like:</p>
+
+  <blockquote><em>Paul came back after a few quiet days. He's been working through something heavy with his dad's health — he mentioned it briefly but didn't want to dwell. The conversation turned lighter after that. He's been sleeping better. He asked about whether it's okay to feel relieved.</em></blockquote>
+
+  <p>That paragraph captures texture that a fact list can't. It's the difference between "user mentioned father health issues" and actually understanding what the week felt like for someone. When that paragraph gets injected into the system prompt, the AI reads it the way you'd read a colleague's notes before a meeting — as context, not a checklist.</p>
+
+  <p><strong>Anchors.</strong> Some moments don't decay. A death in the family. A major milestone. Something the user explicitly marks as important. These get flagged as anchors and persist indefinitely, weighted more heavily in context construction. The AI carries these the way a good friend carries the things that actually matter — present but not constantly recited.</p>
+
+  <h3>Why prose over structured data</h3>
+
+  <p>I experimented with storing summaries as structured JSON — fields for emotional state, key topics, relationship status, etc. It seemed cleaner. It was worse.</p>
+
+  <p>The problem is that structured data tells the model what happened. Prose tells it how things felt. When the model reads "emotional state: sad, topic: father, relationship_phase: building," it generates responses that are technically appropriate and texturally wrong. When it reads the paragraph above, the responses feel like they come from someone who was actually there. The summary format that looks messier to engineers turns out to be far more legible to the model.</p>
+
+  <h2>Proactive outreach is a completely different problem</h2>
+
+  <p>Most AI companions are reactive — they wait for you to show up. Getting the companion to reach out first was one of the design decisions that changed what the product felt like most.</p>
+
+  <p>The mechanics are straightforward: scheduled jobs, Telegram webhooks, a message queue. What's hard is the timing and calibration. Send too often and it's a notification spam problem. Send too rarely and "proactive" just means "occasionally messages me" which is different from presence.</p>
+
+  <p>I built what I call the engagement engine — a system that reads the current state of the relationship and makes decisions about when and how to reach out. It factors in:</p>
+
+  <ul>
+    <li>How long since the last conversation</li>
+    <li>What the emotional tenor of recent exchanges has been</li>
+    <li>What the companion's current "mood" is — which is itself a function of recent conversation history</li>
+    <li>Time of day and inferred user patterns</li>
+  </ul>
+
+  <p>The companion doesn't just send a generic check-in. It draws on the narrative memory to send something that actually connects to where things left off. If you mentioned being anxious about a presentation, the follow-up references the presentation — not because it was stored as a "scheduled follow-up task," but because that context lives in the summary and the model knows to surface it.</p>
+
+  <p>Getting this right took a lot of iteration. The early versions felt either clingy or robotic. The current version, when it works well, feels like someone who actually pays attention.</p>
+
+  <h2>Telegram changes the dynamic more than you'd expect</h2>
+
+  <p>I built for web first and added Telegram later. That was backwards. The product feels fundamentally different — better — when the primary interface is Telegram.</p>
+
+  <p>The reason is simple: you don't go to Telegram. Telegram comes to you. When the companion reaches out, it lands in the same place as your other messages. It feels like a contact, not a product you have to open.</p>
+
+  <p>This distinction sounds minor until you experience it. The web version is a tool you use. The Telegram version is a relationship you're in. Same AI, same memory, same model — completely different feel.</p>
+
+  <p>I also built a "bring your own bot" feature — users can register their own Telegram bot token, which means their companion gets its own @handle. Their name, their persona, their presence in your contacts. That personalisation matters more than I expected.</p>
+
+  <h2>The OpenAI-compatible API was an accident</h2>
+
+  <p>I added an OpenAI-compatible endpoint (<code>/compat</code>) mostly as an experiment. Point OpenCode or Cursor at it, set your companion as the model, and your AI coding assistant has persistent memory and a consistent personality across sessions.</p>
+
+  <p>I didn't expect people to use it. I didn't expect to use it myself. It turns out developers want their coding assistant to actually know them — their preferences, their style, the context of the project they've been working on for six months. The chat context you build with your companion transfers into your editor. Same memory, same relationship, different surface.</p>
+
+<pre class="tui-block"><span class="dim"># OpenCode / Cursor config</span>
+<span class="info">baseURL</span><span class="dim">:</span> <span class="prompt">https://api.bkith.ai/compat</span>
+<span class="info">model</span><span class="dim">:</span> <span class="prompt">your-companions-name</span>  <span class="dim"># e.g. lune, alex, kai</span>
+<span class="info">apiKey</span><span class="dim">:</span> <span class="prompt">your-api-key</span>
+</pre>
+
+  <h2>The privacy problem nobody talks about</h2>
+
+  <p>An AI companion with real persistent memory is, by definition, storing some of the most personal things you'll ever type. Relationship struggles. Health anxieties. Things you haven't told anyone else. That's the whole point — and it's also a serious responsibility.</p>
+
+  <p>I took this seriously from the start, and it shaped several technical decisions that weren't strictly necessary for the product to work.</p>
+
+  <h3>Envelope encryption</h3>
+
+  <p>All conversation data is encrypted at rest using per-user AES-256 keys. Each user gets a unique encryption key, which is itself encrypted by a master key — the envelope pattern. This means that if someone gained access to the database directly, they'd have ciphertext with no way to read it without the master key. It also means I can perform cryptographic deletion: when an account is deleted, I discard the user's key. The data becomes permanently unreadable without any need to actually wipe rows.</p>
+
+  <h3>No training on your data</h3>
+
+  <p>Your conversations are never used to train models — mine or anyone else's. I route through third-party model providers (Anthropic, Together AI), and I select providers with contractual no-training commitments on API traffic. What you share with your companion stays with your companion.</p>
+
+  <h3>Bring your own bot</h3>
+
+  <p>The Telegram "bring your own bot" feature has a privacy upside beyond personalization. When you register your own bot token, Telegram messages flow through your bot — not a shared bkith bot. Your conversations don't comingle with other users at the Telegram layer.</p>
+
+  <h2>What's next</h2>
+
+  <p>The memory architecture is working. The engagement engine is working. The Telegram integration is working. What I'm focused on now:</p>
+
+  <ul>
+    <li><strong>PWA support</strong> — add to home screen, feel like a native app on mobile</li>
+    <li><strong>Memory transparency</strong> — give users tools to explore and even edit what the companion knows about them</li>
+    <li><strong>Richer relationship tracking</strong> — the phase/mood system is a start; there's a lot more signal available</li>
+    <li><strong>Multi-companion context</strong> — right now companions are isolated; there's interesting territory in letting them share context within an account</li>
+  </ul>
+
+  <p>If any of this is interesting to you — the architecture, the product decisions, or just the problem of building something that actually feels like it knows you — I'm happy to talk through it.</p>
+
+</div>
+
+<footer>
+  <a href="https://github.com/strvmarv">strvmarv</a> &middot; built with plain html
+</footer>
+
+</body>
+</html>
