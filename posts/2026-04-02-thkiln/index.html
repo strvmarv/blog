@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shipping AI Agents That Actually Ship Code — strvmarv</title>
+  <meta name="description" content="What I learned building thkiln — benchmarking 6 LLMs, the agent escalation pattern, and why review cost dominates total cost.">
+  <link rel="stylesheet" href="../../style.css">
+  <script src="../../theme.js"></script>
+</head>
+<body>
+
+<header>
+  <a href="/" class="logo">strvmarv</a>
+  <nav>
+    <a href="/">Posts</a>
+    <a href="https://github.com/strvmarv">GitHub</a>
+    <button class="theme-toggle">dark</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="post-meta">
+    <span>April 2, 2026</span>
+    <span class="tag">agents</span>
+    <span class="tag">llm</span>
+    <span class="tag">architecture</span>
+    <span class="tag">devtools</span>
+  </div>
+
+  <h1>Shipping AI Agents That Actually Ship Code</h1>
+  <p class="subtitle">What I learned building <a href="https://thkiln.com">thkiln</a> — a full-lifecycle AI engineering platform where specialized agents scan, scope, implement, review, deploy, and verify your code.</p>
+
+  <h2>The Problem with AI Coding Tools</h2>
+
+  <p>Copilot, Cursor, Claude Code — these tools are genuinely good at generating code. Tab-complete a function, implement a feature from a comment, explain a call stack. That part works.</p>
+
+  <p>But they stop there. They don't scope the work. They don't review their own output for architectural fit. They don't deploy, they don't verify, they don't monitor. You're still the orchestrator — you understand the requirements, you decide what's safe to ship, you catch the drift between what was asked and what was implemented.</p>
+
+  <p>Every session starts cold. No memory of why you made that architectural call last month. No understanding that the auth layer was rewritten for compliance. No awareness that cross-cutting concerns like DI lifecycle and serialization have burned you three times in a row. The model is competent and stateless — a skilled contractor who loses the project context every night.</p>
+
+  <p><a href="https://thkiln.com">thkiln</a> is built on a different premise: connect a repo and the platform handles the full cycle. Scan → scope → implement → review → deploy → verify → monitor. Not one model doing everything — specialized agents, each with a defined role and bounded context.</p>
+
+  <h2>Not One Agent — A Team</h2>
+
+  <p>Before a single line of code is written, five planning agents run in sequence. Each one adds a layer to the understanding of the work.</p>
+
+  <p>The <strong>Product agent</strong> takes the raw request and produces requirements with clarity — acceptance criteria, edge cases, out-of-scope boundaries. It forces the ambiguity out early, before it becomes a bug.</p>
+
+  <p>The <strong>Architect agent</strong> analyzes the codebase cross-layer. It maps the change to existing patterns, identifies risk surfaces, flags where the implementation touches systems it shouldn't. It also makes a decision that matters for cost: does this change affect the UI?</p>
+
+  <p>The <strong>Designer agent</strong> is conditional. It only runs when the Architect flags UI changes. If no UI is involved — a background job, an API endpoint, a data migration — the Designer agent doesn't run at all. This seems obvious in retrospect but most multi-agent systems don't do it. Each agent has a <code>ShouldRun</code> predicate evaluated before execution. You don't spend tokens on agents that aren't needed.</p>
+
+  <p>The <strong>Security agent</strong> runs vulnerability scanning and auth review against the scoped change. It's not a full audit on every run — it's focused on what the Architect identified as the blast radius of this specific change.</p>
+
+  <p>The <strong>Planner agent</strong> takes all of this and produces the implementation breakdown: subtasks, dependencies, effort, ordering. This is what the Coder consumes.</p>
+
+  <p>Then the implementation agents run. The Coder works one subtask at a time, with focused context. The Reviewer evaluates against the acceptance criteria and the architectural constraints. And when things go wrong, there's a pattern that took me a while to get right.</p>
+
+  <h2>The Escalation Pattern</h2>
+
+  <p>The most important architectural decision in thkiln isn't about models or prompts. It's about escalation routing.</p>
+
+  <p>When the Reviewer detects an architectural issue — not "this variable name is bad," but "this DI registration will fail at runtime" or "this bypasses the serialization contract the rest of the system depends on" — it doesn't loop back to the Coder. It escalates to the Architect.</p>
+
+<pre class="tui-block"><span class="bright">Implementation loop</span>
+
+<span class="prompt">Scoper</span> <span class="dim">→</span> <span class="prompt">Coder</span> <span class="dim">→</span> <span class="prompt">Reviewer</span>
+                       <span class="dim">↓ architectural issue detected</span>
+                    <span class="accent">Architect</span> <span class="dim">(broad context, re-scopes)</span>
+                       <span class="dim">↓</span>
+                    <span class="prompt">Coder</span> <span class="dim">(retry with new scope)</span>
+                       <span class="dim">↓</span>
+                    <span class="prompt">Reviewer</span> <span class="dim">→</span> <span class="info">pass</span>
+</pre>
+
+  <p>The reason matters. The Coder has narrow context — it knows this subtask, this file, this function. When it hits an architectural constraint, it doesn't have the information to resolve it correctly. It can only try variations on the same approach, and it thrashes. I watched this happen repeatedly before adding the escalation path: the Coder would produce three or four revisions that all failed for the same root reason.</p>
+
+  <p>The Architect has the broad context. It understands the full system. When it receives the escalation, it can re-scope the subtask with the actual constraint made explicit — and the Coder's next attempt lands correctly.</p>
+
+  <p>This mirrors how good engineering teams work. IC developers don't debug system-wide issues in isolation. They escalate to tech leads who have the broader view. The escalation pattern isn't a workaround for model limitations — it's a recognition that context scope matters and different problems need different context.</p>
+
+  <h2>Benchmarking 6 Models to Find the $0.87 Workflow</h2>
+
+  <p>I ran a concrete benchmark: migrate a Redis pub/sub implementation across the codebase — medium complexity, cross-cutting, involves DI registration, serialization, and a handful of consumers. Each model got the same task, same agents, same reviewer (Haiku, for cost efficiency).</p>
+
+<pre class="tui-block"><span class="bright">Model Benchmarks — Redis pub/sub migration (medium complexity)</span>
+
+<span class="bright">Model              Cost/M (in/out)   Total    Issues   Cycles</span>
+<span class="dim">────────────────────────────────────────────────────────────────</span>
+Qwen3-Coder-Next   <span class="info">$0.10 / $0.10</span>    $1.09    6        3
+DeepSeek-V3.1      <span class="info">$0.10 / $0.20</span>    $0.87    <span class="warn">5 ★</span>      3
+Qwen3-Coder-480B   <span class="info">$0.20 / $0.20</span>    $1.42    TBD      3
+DeepSeek-V3        <span class="info">$0.90 / $0.90</span>    $1.89    8        3
+Haiku              <span class="info">$0.80 / $4.00</span>    $1.68+   N/A      crashed
+Sonnet (est.)      <span class="info">$3.00 / $15.00</span>   ~$13     N/A      ~1 est.
+<span class="dim">────────────────────────────────────────────────────────────────</span>
+<span class="prompt">Winner: DeepSeek-V3.1 — cheapest, fewest real bugs</span>
+</pre>
+
+  <p>Four things stand out from the data.</p>
+
+  <p><strong>Review cost dominates.</strong> The Reviewer (Haiku) costs $0.60-1.05 regardless of which coder model you use. If you're trying to reduce total workflow cost, optimizing the coder model is the wrong lever. You need to reduce review cycles — which means better scoping upstream, not a more expensive coder.</p>
+
+  <p><strong>Bigger model does not mean fewer review cycles.</strong> Qwen3-480B costs twice what V3.1 costs per token and produced the same number of review cycles. The additional capability didn't translate to fewer iterations. More parameters is not the same as better-scoped context.</p>
+
+  <p><strong>Issue quality improves even when count doesn't.</strong> DeepSeek-V3 flagged 8 issues including compilation errors — code that wouldn't run. V3.1 flagged 5 issues, all of which were "this could be more robust" category. Zero won't-work issues. The same number of review cycles, but the issues were categorically different. Cost per cycle doesn't tell you this; you have to look at what the issues actually are.</p>
+
+  <p><strong>The Architect agent is the real fix.</strong> Every model struggled with the same class of problem: cross-cutting concerns. DI lifecycle registration, serialization contracts, consumer ordering. These aren't things you can solve in a single subtask's context window. The models that produced more of these issues did so because they were trying to solve architectural problems with implementation-level context. The pre-analysis pass — the Architect agent running before any code is written — is what prevents these issues from reaching the review cycle at all.</p>
+
+  <h2>Repo Memory</h2>
+
+  <p>One scan is useful. Ten scans are a different thing entirely.</p>
+
+  <p>thkiln builds persistent memory per repo — architectural decisions, team preferences, known debt, past scan results, patterns that have caused problems. By the tenth scan, the agents aren't analyzing a stranger's codebase. They know it. They know the auth layer was rewritten for compliance and shouldn't be simplified. They know the team prefers explicit DI registration over convention-based. They know that the serialization contract has been the source of three bugs in six months.</p>
+
+  <p>This is the same problem I've been working on across different domains. <a href="../2026-03-16-ai-memory-hard/">bkith</a> is about companion memory — how a personal AI builds durable knowledge about you over time. <a href="../2026-04-05-total-recall/">total-recall</a> is about coding assistant memory — how your tools remember corrections and preferences across sessions. thkiln is about repo memory — how an engineering platform accumulates knowledge about a specific codebase. Same underlying problem, different context, different persistence requirements.</p>
+
+  <p>The cold start problem for AI engineering tools isn't just about model capability. It's about what the system knows before it starts working.</p>
+
+  <h2>What's Next</h2>
+
+  <p>thkiln is building itself. Features on the platform are scoped by the Product agent, analyzed by the Architect, implemented by the Coder, reviewed by the Reviewer. The escalation loop has fired on its own development. The benchmark data came from running the benchmark workflow through the platform.</p>
+
+  <p>This isn't a claim that the system is autonomous — I'm still making decisions, still reviewing output, still steering. But the surface area of what I'm managing has changed. I'm evaluating architectural tradeoffs, not line-level code. I'm directing agents, not writing boilerplate.</p>
+
+  <p>The waitlist is open at <a href="https://thkiln.com">thkiln.com</a>. If you're working on a codebase where the AI tools stop short and leave you doing the integration work, that's the gap this is built to close.</p>
+
+</div>
+
+<footer>
+  <a href="https://github.com/strvmarv">strvmarv</a> &middot; built with plain html
+</footer>
+
+</body>
+</html>
