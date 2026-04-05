@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your AI Coding Assistant Forgets Everything — strvmarv</title>
+  <meta name="description" content="A problem/solution analysis of total-recall — multi-tiered persistent memory for TUI coding assistants.">
+  <link rel="stylesheet" href="../../style.css">
+  <script src="../../theme.js"></script>
+</head>
+<body>
+
+<header>
+  <a href="/blog/" class="logo">strvmarv</a>
+  <nav>
+    <a href="/blog/">Posts</a>
+    <a href="https://github.com/strvmarv">GitHub</a>
+    <button class="theme-toggle">dark</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="post-meta">
+    <span>April 5, 2026</span>
+    <span class="tag">memory</span>
+    <span class="tag">mcp</span>
+    <span class="tag">sqlite</span>
+    <span class="tag">vector-search</span>
+  </div>
+
+  <h1>Your AI Coding Assistant Forgets Everything. Here's How I Fixed It.</h1>
+  <p class="subtitle">A problem/solution analysis of <a href="https://github.com/strvmarv/total-recall">total-recall</a> — multi-tiered persistent memory for TUI coding assistants.</p>
+
+  <h2>The Problem</h2>
+
+  <p>Every TUI coding assistant has the same gap. You spend an hour teaching Claude Code about your project's quirks — that the auth middleware was rewritten for compliance, that integration tests must hit a real database, that your team prefers bundled PRs for refactors — and then the session ends.</p>
+
+  <p>Next session: blank slate.</p>
+
+<pre class="tui-block"><span class="prompt">$</span> claude
+<span class="dim">╭───────────────────────────────────────────╮</span>
+<span class="dim">│</span> <span class="bright">Claude Code v1.0.23</span>                       <span class="dim">│</span>
+<span class="dim">│</span> Session started.                          <span class="dim">│</span>
+<span class="dim">│</span>                                           <span class="dim">│</span>
+<span class="dim">│</span> <span class="warn">! No memory of previous sessions</span>          <span class="dim">│</span>
+<span class="dim">│</span> <span class="warn">! No project context loaded</span>               <span class="dim">│</span>
+<span class="dim">│</span> <span class="warn">! Previous corrections forgotten</span>          <span class="dim">│</span>
+<span class="dim">╰───────────────────────────────────────────╯</span>
+
+<span class="prompt">&gt;</span> refactor the auth middleware
+
+<span class="dim">  Analyzing codebase...
+  Mocking the database layer for testability.
+  Opening separate PRs: auth-core, auth-utils, auth-tests.
+  Note: removed legacy compliance check — looked unused.</span>
+</pre>
+
+  <p>The built-in memory systems are flat files. No tiering — every memory is treated equally, leading to context bloat or information loss. No semantic search — retrieval is by filename, not meaning. Switch from Claude Code to Copilot CLI? Start from scratch. No observability to know if memory is even helping.</p>
+
+  <h2>The Solution</h2>
+
+  <p><a href="https://github.com/strvmarv/total-recall">total-recall</a> introduces a three-tier memory architecture backed by local SQLite and vector embeddings. Memories aren't flat files — they're ranked, decayed, promoted, and searched semantically.</p>
+
+  <div class="tier-diagram">
+    <div class="tier-card hot">
+      <h3>Hot</h3>
+      <div class="limit">&le; 50</div>
+      <p>Auto-injected into every prompt. Your most critical context, always present. Token-budgeted to 4K tokens.</p>
+    </div>
+    <div class="tier-card warm">
+      <h3>Warm</h3>
+      <div class="limit">&le; 10K</div>
+      <p>Retrieved semantically per query. Ask about auth — auth memories surface automatically.</p>
+    </div>
+    <div class="tier-card cold">
+      <h3>Cold</h3>
+      <div class="limit">&infin;</div>
+      <p>Hierarchical knowledge base. Ingest docs, READMEs, architecture notes, entire source trees.</p>
+    </div>
+  </div>
+
+  <p>Here's what the same session looks like with total-recall loaded:</p>
+
+<pre class="tui-block"><span class="prompt">$</span> claude
+<span class="dim">╭──────────────────────────────────────────────────────╮</span>
+<span class="dim">│</span> <span class="bright">Claude Code v1.0.23</span>                                  <span class="dim">│</span>
+<span class="dim">│</span> <span class="info">total-recall loaded — 3 hot, 12 warm, 847 KB chunks</span>  <span class="dim">│</span>
+<span class="dim">│</span> <span class="dim">Last session: 2 hours ago</span>                            <span class="dim">│</span>
+<span class="dim">│</span>                                                      <span class="dim">│</span>
+<span class="dim">│</span> <span class="bright">Hot context:</span>                                         <span class="dim">│</span>
+<span class="dim">│</span> <span class="accent">[correction]</span>  auth rewrite was compliance-driven     <span class="dim">│</span>
+<span class="dim">│</span> <span class="accent">[preference]</span>  integration tests must use real DB     <span class="dim">│</span>
+<span class="dim">│</span> <span class="accent">[preference]</span>  bundled PRs for refactor changes       <span class="dim">│</span>
+<span class="dim">╰──────────────────────────────────────────────────────╯</span>
+
+<span class="prompt">&gt;</span> refactor the auth middleware
+
+<span class="dim">  Recalling: auth rewrite was compliance-driven — preserving all
+  compliance checks. Using real DB for integration tests as required.
+  Bundling auth-core, auth-utils, and auth-tests into a single PR.</span>
+</pre>
+
+</div>
+
+<footer>
+  <a href="https://github.com/strvmarv">strvmarv</a> &middot; built with plain html
+</footer>
+
+</body>
+</html>
